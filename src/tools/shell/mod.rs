@@ -1,0 +1,229 @@
+use portable_pty::PtySize;
+use rig::prelude::*;
+use rig::tool::{IntoToolOutput, Tool};
+use schemars::{JsonSchema, schema_for};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use termwiz::input::{KeyCode, Modifiers};
+use thiserror::Error;
+use tokio::sync::RwLock;
+use wezterm_term::Line;
+
+use crate::tools::Environment;
+use crate::tools::shell::session::{Session, SessionName, SessionTermination};
+
+mod session;
+#[cfg(test)]
+mod tests;
+
+pub struct Shell<'env> {
+    shell: Arc<Path>,
+    env: &'env Environment,
+    pty_size: PtySize,
+    sattle_down_timeout: Duration,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ShellArgs {
+    commands: Arc<[ShellCommand]>,
+    /// Use this parameter to switch shell instances. Defaults to `main`.
+    #[serde(default)]
+    session: SessionName,
+    /// Defaults to false. If set, you will be notified in a future turn.
+    #[serde(default)]
+    background: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellCommand {
+    /// Paste into the shell.
+    Input(String),
+    /// Send a keypress. Do it manually to run the command.
+    Enter,
+    /// Send SIGINT.
+    CtrlC,
+    /// Send SIGTERM.
+    Terminate,
+    /// Send a keypress.
+    Escape,
+    /// Send a keypress.
+    Tab,
+}
+
+#[derive(Debug, Error)]
+pub enum ShellError {
+    #[error("failed to open terminal: {0}")]
+    OpenPty(anyhow::Error),
+    #[error("failed to spawn shell: {0}")]
+    SpawnShell(anyhow::Error),
+    #[error("failed to kill process: {0}")]
+    KillProcess(std::io::Error),
+    #[error("write error: {0}")]
+    Write(anyhow::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ShellOutput {
+    RunningInBackground(SessionName),
+    Output(String),
+}
+
+type SessionMapContext = Arc<RwLock<HashMap<SessionName, Session>>>;
+
+impl Tool for Shell<'_> {
+    const NAME: &'static str = "shell";
+
+    type Args = ShellArgs;
+
+    type Output = ShellOutput;
+
+    type Error = ShellError;
+
+    fn description(&self) -> String {
+        if let Some(os_name) = self.env.os_name() {
+            format!(
+                "Access to a {} {} shell",
+                os_name,
+                self.shell.file_name().unwrap().to_string_lossy()
+            )
+        } else {
+            "Access to a shell".into()
+        }
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        schema_for!(ShellArgs).into()
+    }
+
+    async fn call(
+        &self,
+        context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
+        let session = if let Some(session_by_name) = context.get::<SessionMapContext>()
+            && let Some(session) = session_by_name.read().await.get(&args.session)
+        {
+            session.clone()
+        } else {
+            let system = portable_pty::native_pty_system();
+            let session = Session::new::<256, _, _>(
+                args.session.clone(),
+                system.as_ref(),
+                self.pty_size,
+                self.shell.as_os_str(),
+            )?;
+            context.insert(SessionMapContext::new(RwLock::new(
+                [(args.session.clone(), session.clone())].into(),
+            )));
+            session
+        };
+        let mut terminated = false;
+        for command in args.commands.iter() {
+            match command {
+                ShellCommand::Input(text) => {
+                    if text.len() > 1 {
+                        session.send_input(text).await?;
+                    } else {
+                        session
+                            .send_key(KeyCode::Char(text.chars().next().unwrap()), Modifiers::NONE)
+                            .await?;
+                    }
+                }
+
+                ShellCommand::Enter => session.send_key(KeyCode::Enter, Modifiers::NONE).await?,
+                ShellCommand::CtrlC => {
+                    session
+                        .send_key(KeyCode::Char('c'), Modifiers::CTRL)
+                        .await?
+                }
+                ShellCommand::Terminate => {
+                    if session.send_terminate().await? == SessionTermination::Shell {
+                        if let Some(session_map) = context.get::<SessionMapContext>() {
+                            session_map.write().await.remove(&args.session);
+                        }
+                        terminated = true;
+                        break;
+                    }
+                }
+                ShellCommand::Escape => {
+                    session.send_key(KeyCode::Escape, Modifiers::NONE).await?;
+                }
+                ShellCommand::Tab => {
+                    session.send_key(KeyCode::Tab, Modifiers::NONE).await?;
+                }
+            }
+        }
+        if terminated {
+            return Ok(ShellOutput::Output(
+                format!(
+                    "Shell process exited: SIGTERM; Session `{}` is null",
+                    args.session
+                )
+                .into(),
+            ));
+        }
+
+        if args.background {
+            return Ok(ShellOutput::RunningInBackground(args.session));
+        }
+
+        let output = session
+            .read_to_sattle_down(self.sattle_down_timeout)
+            .await?;
+        session.advance_bytes(output).await?;
+
+        Ok(session.terminal().await.screen().all_lines().into())
+    }
+}
+
+impl<'env> Shell<'env> {
+    pub fn os_default(env: &'env Environment) -> Self {
+        Self {
+            shell: PathBuf::from_str(&std::env::var("SHELL").unwrap())
+                .unwrap()
+                .into(),
+            env: env,
+            pty_size: PtySize::default(),
+            sattle_down_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+impl IntoToolOutput for ShellOutput {
+    fn into_tool_output(self) -> Result<rig::tool::ToolOutput, rig::tool::ToolExecutionError> {
+        match self {
+            ShellOutput::RunningInBackground(session) => Ok(rig::tool::ToolOutput::text(format!(
+                "Running in session `{}`",
+                session
+            ))),
+            ShellOutput::Output(output) => Ok(rig::tool::ToolOutput::text(output)),
+        }
+    }
+}
+
+impl<I> From<I> for ShellOutput
+where
+    I: IntoIterator<Item = Line>,
+{
+    fn from(value: I) -> Self {
+        Self::Output(
+            value
+                .into_iter()
+                .map(|line| line.as_str().to_string())
+                .reduce(|accu, curr| {
+                    if accu.ends_with('\n') && curr.is_empty() {
+                        accu
+                    } else {
+                        format!("{accu}\n{curr}")
+                    }
+                })
+                .unwrap_or_default(),
+        )
+    }
+}

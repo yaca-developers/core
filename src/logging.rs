@@ -27,6 +27,14 @@ macro_rules! error {
 }
 
 #[macro_export]
+macro_rules! debug {
+    ($($arg:expr),*) => {
+        #[cfg(feature = "tracing")]
+        tracing::debug!($($arg),*)
+    };
+}
+
+#[macro_export]
 macro_rules! trace {
     ($($arg:expr),*) => {
         #[cfg(feature = "tracing")]
