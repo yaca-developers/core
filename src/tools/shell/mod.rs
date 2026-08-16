@@ -4,7 +4,6 @@ use rig::tool::{IntoToolOutput, Tool};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -21,9 +20,9 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-pub struct Shell<'env> {
+pub struct Shell {
     shell: Arc<Path>,
-    env: &'env Environment,
+    env: Arc<Environment>,
     pty_size: PtySize,
     sattle_down_timeout: Duration,
 }
@@ -76,7 +75,7 @@ pub enum ShellOutput {
 
 type SessionMapContext = Arc<RwLock<HashMap<SessionName, Session>>>;
 
-impl Tool for Shell<'_> {
+impl Tool for Shell {
     const NAME: &'static str = "shell";
 
     type Args = ShellArgs;
@@ -182,13 +181,13 @@ impl Tool for Shell<'_> {
     }
 }
 
-impl<'env> Shell<'env> {
-    pub fn os_default(env: &'env Environment) -> Self {
+impl Shell {
+    pub fn os_default(env: Arc<Environment>) -> Self {
         Self {
             shell: PathBuf::from_str(&std::env::var("SHELL").unwrap())
                 .unwrap()
                 .into(),
-            env: env,
+            env,
             pty_size: PtySize::default(),
             sattle_down_timeout: Duration::from_secs(5),
         }

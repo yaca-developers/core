@@ -4,6 +4,8 @@ use sysinfo::System;
 
 mod shell;
 
+pub use shell::Shell;
+
 pub struct Environment {
     os_name: Option<Arc<str>>,
     host_name: Option<Arc<str>>,

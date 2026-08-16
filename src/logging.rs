@@ -42,4 +42,4 @@ macro_rules! trace {
     };
 }
 
-pub use info;
+pub use crate::{debug, error, info, trace, warn};
