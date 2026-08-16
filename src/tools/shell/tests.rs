@@ -408,7 +408,7 @@ fn description_includes_os_name_and_shell_name() {
     let env = unix_env();
     let shell = sh_shell(env);
 
-    assert_eq!(shell.description(), "Access to a generic unix sh shell");
+    assert_eq!(shell.description(), "Access to a generic unix sh shell.");
 }
 
 #[test]

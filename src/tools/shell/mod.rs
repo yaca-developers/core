@@ -89,7 +89,7 @@ impl Tool for Shell {
     fn description(&self) -> String {
         if let Some(os_name) = self.env.os_name() {
             format!(
-                "Access to a {} {} shell",
+                "Access to a {} {} shell.",
                 os_name,
                 self.shell.file_name().unwrap().to_string_lossy()
             )
@@ -174,6 +174,18 @@ impl Tool for Shell {
                 )
                 .into(),
             ));
+        }
+
+        if args
+            .commands
+            .iter()
+            .any(|it| matches!(it, ShellCommand::Input(_)))
+            && !args
+                .commands
+                .iter()
+                .any(|it| matches!(it, ShellCommand::Enter))
+        {
+            session.send_key(KeyCode::Enter, Modifiers::NONE).await?;
         }
 
         if args.background {
