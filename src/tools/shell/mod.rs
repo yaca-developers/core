@@ -27,6 +27,7 @@ pub struct Shell {
     env: Arc<Environment>,
     pty_size: PtySize,
     sattle_down_timeout: Duration,
+    ctx: RwLock<HashMap<SessionName, (Session, Arc<RwLock<Scrollback>>)>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -44,8 +45,17 @@ pub struct ShellArgs {
 #[serde(rename_all = "snake_case")]
 pub enum ShellCommand {
     /// Paste into the shell.
-    Input(String),
-    /// Send a keypress. Should be sent to run the command.
+    Paste(String),
+    /// Emulate per-keypress.
+    Press(String),
+    /// Send a special one.
+    Send(ShellCommandSend),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellCommandSend {
+    /// Send a keypress.
     Enter,
     /// Send SIGINT.
     CtrlC,
@@ -75,8 +85,6 @@ pub enum ShellOutput {
     Output(String),
 }
 
-type BySessionNameContext = Arc<RwLock<HashMap<SessionName, (Session, Arc<RwLock<Scrollback>>)>>>;
-
 impl Tool for Shell {
     const NAME: &'static str = "shell";
 
@@ -89,7 +97,7 @@ impl Tool for Shell {
     fn description(&self) -> String {
         if let Some(os_name) = self.env.os_name() {
             format!(
-                "Access to a {} {} shell.",
+                "Access to a {} {} shell in a full-featured terminal emulator. Keypress-based operation and interactive CLI are supported.",
                 os_name,
                 self.shell.file_name().unwrap().to_string_lossy()
             )
@@ -107,10 +115,7 @@ impl Tool for Shell {
         context: &mut ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        let (session, scrollback) = if let Some(session_by_name) =
-            context.get::<BySessionNameContext>()
-            && let Some(pack) = session_by_name.read().await.get(&args.session)
-        {
+        let (session, scrollback) = if let Some(pack) = self.ctx.read().await.get(&args.session) {
             pack.clone()
         } else {
             let system = portable_pty::native_pty_system();
@@ -121,47 +126,46 @@ impl Tool for Shell {
                 self.shell.as_os_str(),
             )?;
             let scrollback = Arc::new(RwLock::new(Scrollback::new()));
-            context.insert(BySessionNameContext::new(RwLock::new(
-                [(
-                    args.session.clone(),
-                    (session.clone(), Arc::clone(&scrollback)),
-                )]
-                .into(),
-            )));
+            self.ctx.write().await.insert(
+                args.session.clone(),
+                (session.clone(), Arc::clone(&scrollback)),
+            );
             (session, scrollback)
         };
         let mut terminated = false;
         for command in args.commands.iter() {
             match command {
-                ShellCommand::Input(text) => {
+                ShellCommand::Paste(text) => {
                     if text.len() > 1 {
                         session.send_input(text).await?;
-                    } else if !text.is_empty() {
-                        session
-                            .send_key(KeyCode::Char(text.chars().next().unwrap()), Modifiers::NONE)
-                            .await?;
+                    }
+                }
+                ShellCommand::Press(text) => {
+                    let mut chars = text.chars();
+                    while let Some(c) = chars.next() {
+                        session.send_key(KeyCode::Char(c), Modifiers::NONE).await?;
                     }
                 }
 
-                ShellCommand::Enter => session.send_key(KeyCode::Enter, Modifiers::NONE).await?,
-                ShellCommand::CtrlC => {
+                ShellCommand::Send(ShellCommandSend::Enter) => {
+                    session.send_key(KeyCode::Enter, Modifiers::NONE).await?
+                }
+                ShellCommand::Send(ShellCommandSend::CtrlC) => {
                     session
                         .send_key(KeyCode::Char('c'), Modifiers::CTRL)
                         .await?
                 }
-                ShellCommand::Terminate => {
+                ShellCommand::Send(ShellCommandSend::Terminate) => {
                     if session.send_terminate().await? == SessionTermination::Shell {
-                        if let Some(session_map) = context.get::<BySessionNameContext>() {
-                            session_map.write().await.remove(&args.session);
-                        }
+                        self.ctx.write().await.remove(&args.session);
                         terminated = true;
                         break;
                     }
                 }
-                ShellCommand::Escape => {
+                ShellCommand::Send(ShellCommandSend::Escape) => {
                     session.send_key(KeyCode::Escape, Modifiers::NONE).await?;
                 }
-                ShellCommand::Tab => {
+                ShellCommand::Send(ShellCommandSend::Tab) => {
                     session.send_key(KeyCode::Tab, Modifiers::NONE).await?;
                 }
             }
@@ -179,11 +183,11 @@ impl Tool for Shell {
         if args
             .commands
             .iter()
-            .any(|it| matches!(it, ShellCommand::Input(_)))
+            .any(|it| matches!(it, ShellCommand::Paste(_)))
             && !args
                 .commands
                 .iter()
-                .any(|it| matches!(it, ShellCommand::Enter))
+                .any(|it| matches!(it, ShellCommand::Send(ShellCommandSend::Enter)))
         {
             session.send_key(KeyCode::Enter, Modifiers::NONE).await?;
         }
@@ -213,6 +217,7 @@ impl Shell {
             env,
             pty_size: PtySize::default(),
             sattle_down_timeout: Duration::from_secs(5),
+            ctx: RwLock::new(HashMap::default()),
         }
     }
 }
