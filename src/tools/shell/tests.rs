@@ -30,6 +30,12 @@ async fn run_sh() {
     let env = unix_env();
     let mut shell = super::Shell::os_default(env);
     shell.shell = PathBuf::from_str("/bin/sh").unwrap().into();
+
+    assert!(
+        shell.parameters().to_string().contains("Defaults to false"),
+        "schemar does not contain documentation"
+    );
+
     let mut tool_context = ToolContext::default();
     let result = shell
         .call(
