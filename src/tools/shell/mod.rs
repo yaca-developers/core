@@ -43,7 +43,7 @@ pub struct ShellArgs {
 pub enum ShellCommand {
     /// Paste into the shell.
     Input(String),
-    /// Send a keypress. Do it manually to run the command.
+    /// Send a keypress. Should be sent to run the command.
     Enter,
     /// Send SIGINT.
     CtrlC,

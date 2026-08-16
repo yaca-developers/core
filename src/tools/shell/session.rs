@@ -89,7 +89,7 @@ impl Session {
                             if bytes_read == 0 {
                                 break;
                             }
-                            read_sender.send(buf[..bytes_read].into()).unwrap();
+                            _ = read_sender.send(buf[..bytes_read].into());
                         }
                         Err(err) => match err.kind() {
                             std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted => {}
