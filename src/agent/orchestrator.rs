@@ -110,6 +110,7 @@ where
             .rig
             .stream_prompt(message)
             .conversation(self.conversation_id.to_string())
+            .max_turns(usize::MAX)
             .await;
         while let Some(item) = stream.next().await {
             let Some(hook) = self.lifecycle_hook.as_ref() else {

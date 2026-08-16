@@ -1,3 +1,6 @@
+#[cfg(unix)]
+use std::sync::Arc;
+
 use crate::logging;
 
 use rig::tool::Tool;
@@ -6,11 +9,12 @@ use crate::tools::{Environment, shell::ShellOutput};
 
 /// Shared test fixture: a generic unix environment description.
 #[cfg(unix)]
-fn unix_env() -> Environment {
+fn unix_env() -> Arc<Environment> {
     Environment {
         os_name: Some("generic unix".into()),
         host_name: Some("test-host".into()),
     }
+    .into()
 }
 
 #[tokio::test]
@@ -20,7 +24,7 @@ async fn run_sh() {
     use std::{path::PathBuf, str::FromStr};
 
     let env = unix_env();
-    let mut shell = super::Shell::os_default(&env);
+    let mut shell = super::Shell::os_default(env);
     shell.shell = PathBuf::from_str("/bin/sh").unwrap().into();
     let result = shell
         .call(
@@ -39,7 +43,7 @@ async fn run_sh() {
 
 /// Shared test fixture: a `Shell` wired up to `/bin/sh` for the given environment.
 #[cfg(unix)]
-fn sh_shell(env: &Environment) -> super::Shell<'_> {
+fn sh_shell(env: Arc<Environment>) -> super::Shell {
     use std::{path::PathBuf, str::FromStr};
 
     let mut shell = super::Shell::os_default(env);
@@ -52,7 +56,7 @@ fn sh_shell(env: &Environment) -> super::Shell<'_> {
 #[cfg(unix)]
 async fn echo_hello_is_reflected_in_output() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
 
     let result = shell
         .call(
@@ -78,7 +82,7 @@ async fn echo_hello_is_reflected_in_output() {
 #[cfg(unix)]
 async fn session_state_persists_across_calls() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
     let mut context = Default::default();
 
     shell
@@ -113,7 +117,7 @@ async fn session_state_persists_across_calls() {
 #[cfg(unix)]
 async fn distinct_sessions_do_not_share_state() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
     let mut context = Default::default();
 
     shell
@@ -153,7 +157,7 @@ async fn distinct_sessions_do_not_share_state() {
 #[cfg(unix)]
 async fn terminate_kills_shell_and_allows_fresh_restart() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
     let mut context = Default::default();
 
     let result = shell
@@ -191,7 +195,7 @@ async fn terminate_kills_shell_and_allows_fresh_restart() {
 #[cfg(unix)]
 async fn background_flag_returns_immediately_with_session_name() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
 
     let start = std::time::Instant::now();
     let result = shell
@@ -223,7 +227,7 @@ async fn background_flag_returns_immediately_with_session_name() {
 #[cfg(unix)]
 async fn ctrl_c_interrupts_long_running_command() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
     let mut context = Default::default();
 
     shell
@@ -263,7 +267,7 @@ async fn ctrl_c_interrupts_long_running_command() {
 #[cfg(unix)]
 async fn single_character_input_is_sent_as_keypress() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
     let mut context = Default::default();
 
     shell
@@ -300,7 +304,7 @@ async fn single_character_input_is_sent_as_keypress() {
 #[cfg(unix)]
 async fn multiple_commands_execute_in_sequence() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
 
     let result = shell
         .call(
@@ -325,7 +329,7 @@ async fn multiple_commands_execute_in_sequence() {
 #[cfg(unix)]
 async fn empty_command_list_is_a_no_op() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
 
     let result = shell
         .call(
@@ -344,7 +348,7 @@ async fn empty_command_list_is_a_no_op() {
 #[cfg(unix)]
 async fn escape_and_tab_do_not_error() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
 
     let result = shell
         .call(
@@ -381,7 +385,7 @@ fn shell_command_rejects_unknown_variant() {
 #[cfg(unix)]
 fn description_includes_os_name_and_shell_name() {
     let env = unix_env();
-    let shell = sh_shell(&env);
+    let shell = sh_shell(env);
 
     assert_eq!(shell.description(), "Access to a generic unix sh shell");
 }
@@ -395,7 +399,7 @@ fn description_falls_back_without_os_name() {
         os_name: None,
         host_name: None,
     };
-    let mut shell = super::Shell::os_default(&env);
+    let mut shell = super::Shell::os_default(env.into());
     shell.shell = PathBuf::from_str("/bin/sh").unwrap().into();
 
     assert_eq!(shell.description(), "Access to a shell");
@@ -409,7 +413,7 @@ fn description_falls_back_without_os_name() {
 #[cfg(unix)]
 async fn vim_edit_and_save_file() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
     let mut context = Default::default();
 
     let file_path = format!(
@@ -452,8 +456,7 @@ async fn vim_edit_and_save_file() {
     let saved_screen = shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": ["escape", {"input": ":wq"}, "enter"]}"#)
-                .unwrap(),
+            serde_json::from_str(r#"{"commands": ["escape", {"input": ":wq"}, "enter"]}"#).unwrap(),
         )
         .await
         .expect("Failed to save and quit vim");
@@ -475,7 +478,7 @@ async fn vim_edit_and_save_file() {
 #[cfg(unix)]
 async fn vim_quit_without_saving_discards_changes() {
     let env = unix_env();
-    let mut shell = sh_shell(&env);
+    let mut shell = sh_shell(env);
     let mut context = Default::default();
 
     let file_path = format!(
@@ -513,8 +516,7 @@ async fn vim_quit_without_saving_discards_changes() {
     shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": ["escape", {"input": ":q!"}, "enter"]}"#)
-                .unwrap(),
+            serde_json::from_str(r#"{"commands": ["escape", {"input": ":q!"}, "enter"]}"#).unwrap(),
         )
         .await
         .expect("Failed to quit vim without saving");

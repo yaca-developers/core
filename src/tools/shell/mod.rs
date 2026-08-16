@@ -128,7 +128,7 @@ impl Tool for Shell {
                 ShellCommand::Input(text) => {
                     if text.len() > 1 {
                         session.send_input(text).await?;
-                    } else {
+                    } else if !text.is_empty() {
                         session
                             .send_key(KeyCode::Char(text.chars().next().unwrap()), Modifiers::NONE)
                             .await?;
