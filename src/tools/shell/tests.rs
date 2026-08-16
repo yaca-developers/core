@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::logging;
 #[cfg(unix)]
-use crate::tools::shell::{SessionMapContext, session::SessionName};
+use crate::tools::shell::{BySessionNameContext, session::SessionName};
 
 use rig::tool::Tool;
 #[cfg(unix)]
@@ -44,9 +44,9 @@ async fn run_sh() {
             assert!(out.contains(&format!("{}\n", i)), "missing {i}");
         }
 
-        if let Some(sessions) = tool_context.get::<SessionMapContext>() {
+        if let Some(sessions) = tool_context.get::<BySessionNameContext>() {
             let read_mutex = sessions.read().await;
-            let main_session = read_mutex
+            let (main_session, _) = read_mutex
                 .get(&SessionName::from("main".to_string()))
                 .unwrap();
             assert!(!main_session.is_alive().await)
@@ -541,4 +541,72 @@ async fn vim_quit_without_saving_discards_changes() {
 
     assert_eq!(contents, "original content\n");
     assert!(!contents.contains("this should not be saved"));
+}
+
+#[tokio::test]
+#[test_log::test]
+#[cfg(unix)]
+async fn only_unseen_lines_are_shown() {
+    use std::{path::PathBuf, str::FromStr};
+
+    let env = unix_env();
+    let mut shell = super::Shell::os_default(env);
+    shell.shell = PathBuf::from_str("/bin/sh").unwrap().into();
+    let mut tool_context = ToolContext::default();
+    let result = shell
+        .call(
+            &mut tool_context,
+            serde_json::from_str(
+                r#"{"commands": [{"input": "for i in $(seq 1 10); do echo $i; done"}, "enter"]}"#,
+            )
+            .unwrap(),
+        )
+        .await
+        .expect("Run failed");
+    if let ShellOutput::Output(out) = result {
+        logging::info!("stdout: {}", out);
+        for i in 1..=10 {
+            assert!(out.contains(&format!("{}\n", i)), "missing {i}");
+        }
+    } else {
+        panic!("Unexpected output: {:?}", result);
+    }
+
+    let result = shell
+        .call(
+            &mut tool_context,
+            serde_json::from_str(
+                r#"{"commands": [{"input": "for i in $(seq 1 10); do echo $i; done"}, "enter"]}"#,
+            )
+            .unwrap(),
+        )
+        .await
+        .expect("Run failed");
+    if let ShellOutput::Output(out) = result {
+        logging::info!("stdout: {}", out);
+        for i in 1..=10 {
+            assert!(out.contains(&format!("{}\n", i)), "missing {i}");
+        }
+    } else {
+        panic!("Unexpected output: {:?}", result);
+    }
+
+    let result = shell
+        .call(
+            &mut tool_context,
+            serde_json::from_str(
+                r#"{"commands": [{"input": "for i in $(seq 11 20); do echo $i; done"}, "enter"]}"#,
+            )
+            .unwrap(),
+        )
+        .await
+        .expect("Run failed");
+    if let ShellOutput::Output(out) = result {
+        logging::info!("stdout: {}", out);
+        for i in 11..=20 {
+            assert!(out.contains(&format!("{}\n", i)), "missing {i}");
+        }
+    } else {
+        panic!("Unexpected output: {:?}", result);
+    }
 }

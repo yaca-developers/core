@@ -14,8 +14,10 @@ use tokio::sync::RwLock;
 use wezterm_term::Line;
 
 use crate::tools::Environment;
+use crate::tools::shell::scrollback::Scrollback;
 use crate::tools::shell::session::{Session, SessionName, SessionTermination};
 
+mod scrollback;
 mod session;
 #[cfg(test)]
 mod tests;
@@ -73,7 +75,7 @@ pub enum ShellOutput {
     Output(String),
 }
 
-type SessionMapContext = Arc<RwLock<HashMap<SessionName, Session>>>;
+type BySessionNameContext = Arc<RwLock<HashMap<SessionName, (Session, Arc<RwLock<Scrollback>>)>>>;
 
 impl Tool for Shell {
     const NAME: &'static str = "shell";
@@ -105,10 +107,11 @@ impl Tool for Shell {
         context: &mut ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
-        let session = if let Some(session_by_name) = context.get::<SessionMapContext>()
-            && let Some(session) = session_by_name.read().await.get(&args.session)
+        let (session, scrollback) = if let Some(session_by_name) =
+            context.get::<BySessionNameContext>()
+            && let Some(pack) = session_by_name.read().await.get(&args.session)
         {
-            session.clone()
+            pack.clone()
         } else {
             let system = portable_pty::native_pty_system();
             let session = Session::new::<256, _, _>(
@@ -117,10 +120,15 @@ impl Tool for Shell {
                 self.pty_size,
                 self.shell.as_os_str(),
             )?;
-            context.insert(SessionMapContext::new(RwLock::new(
-                [(args.session.clone(), session.clone())].into(),
+            let scrollback = Arc::new(RwLock::new(Scrollback::new()));
+            context.insert(BySessionNameContext::new(RwLock::new(
+                [(
+                    args.session.clone(),
+                    (session.clone(), Arc::clone(&scrollback)),
+                )]
+                .into(),
             )));
-            session
+            (session, scrollback)
         };
         let mut terminated = false;
         for command in args.commands.iter() {
@@ -143,7 +151,7 @@ impl Tool for Shell {
                 }
                 ShellCommand::Terminate => {
                     if session.send_terminate().await? == SessionTermination::Shell {
-                        if let Some(session_map) = context.get::<SessionMapContext>() {
+                        if let Some(session_map) = context.get::<BySessionNameContext>() {
                             session_map.write().await.remove(&args.session);
                         }
                         terminated = true;
@@ -177,7 +185,10 @@ impl Tool for Shell {
             .await?;
         session.advance_bytes(output).await?;
 
-        Ok(session.terminal().await.screen().all_lines().into())
+        let all_lines = session.terminal().await.screen().all_lines();
+        let unseen_lines = scrollback.read().await.get_unseen(all_lines.iter()).into();
+        scrollback.write().await.update(all_lines);
+        Ok(unseen_lines)
     }
 }
 
@@ -206,9 +217,9 @@ impl IntoToolOutput for ShellOutput {
     }
 }
 
-impl<I> From<I> for ShellOutput
+impl<'a, I> From<I> for ShellOutput
 where
-    I: IntoIterator<Item = Line>,
+    I: IntoIterator<Item = &'a Line>,
 {
     fn from(value: I) -> Self {
         Self::Output(
