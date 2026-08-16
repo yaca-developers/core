@@ -6,15 +6,17 @@ use std::ffi::OsStr;
 use std::fmt::Display;
 use std::io::{Read, Write};
 use std::time::Duration;
+use std::usize;
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 use termwiz::escape::parser::Parser;
 use termwiz::input::{KeyCode, Modifiers};
 use tokio::select;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard, broadcast};
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard, broadcast, mpsc};
 use wezterm_term::performer::Performer;
 use wezterm_term::{TerminalConfiguration, TerminalSize, TerminalState};
 
+use crate::logging;
 use crate::tools::shell::ShellError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -26,7 +28,7 @@ pub struct Session {
     name: SessionName,
     pty_pair: Arc<Mutex<PtyPair>>,
     shell_process: Arc<RwLock<Box<dyn portable_pty::Child + Send + Sync>>>,
-    read_receiver: Arc<broadcast::Receiver<Arc<[u8]>>>,
+    read_receiver: Arc<Mutex<mpsc::Receiver<Arc<[u8]>>>>,
     terminal: Arc<RwLock<TerminalState>>,
     read_task: Arc<std::thread::JoinHandle<Result<(), std::io::Error>>>,
 }
@@ -61,7 +63,7 @@ impl Session {
             .master
             .try_clone_reader()
             .map_err(ShellError::SpawnShell)?;
-        let (read_sender, read_receiver) = broadcast::channel(1);
+        let (read_sender, read_receiver) = mpsc::channel(4);
 
         let mut terminal_size = TerminalSize::default();
         terminal_size.rows = pty_size.rows as usize;
@@ -80,16 +82,20 @@ impl Session {
                 "0.1.0".into(),
                 writer,
             ))),
-            read_receiver: Arc::new(read_receiver),
+            read_receiver: Arc::new(Mutex::new(read_receiver)),
             read_task: Arc::new(std::thread::spawn(move || {
                 let mut buf = [0u8; BUFFER_SIZE];
+                let mut bytes_sent = 0;
                 loop {
                     match reader.read(&mut buf) {
                         Ok(bytes_read) => {
                             if bytes_read == 0 {
                                 break;
                             }
-                            _ = read_sender.send(buf[..bytes_read].into());
+                            bytes_sent += bytes_read;
+                            if let Err(err) = read_sender.blocking_send(buf[..bytes_read].into()) {
+                                logging::error!("failed to send terminal data: {err}");
+                            }
                         }
                         Err(err) => match err.kind() {
                             std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted => {}
@@ -97,6 +103,7 @@ impl Session {
                         },
                     }
                 }
+                logging::debug!("sent {} bytes", bytes_sent);
                 Ok(())
             })),
         })
@@ -128,22 +135,24 @@ impl Session {
     }
 
     pub async fn read_to_sattle_down(&self, timeout: Duration) -> Result<Box<[u8]>, ShellError> {
-        let mut receiver = self.read_receiver.resubscribe();
+        let mut receiver = self.read_receiver.lock().await;
         let mut accumulator = Vec::new();
+        let mut bytes_read = 0;
         loop {
             select! {
                 recv = receiver.recv() => {
-                    match recv {
-                        Ok(bytes) => accumulator.extend_from_slice(&bytes),
-                        Err(RecvError::Closed) => break,
-                        Err(RecvError::Lagged(_)) => {}
-                    }
+                    let Some(bytes) = recv else {
+                        break;
+                    };
+                    accumulator.extend_from_slice(&bytes);
+                    bytes_read += bytes.len();
                 }
                 _ = tokio::time::sleep(timeout) => {
                     break
                 }
             }
         }
+        logging::debug!("read {} bytes", bytes_read);
         return Ok(accumulator.into_boxed_slice());
     }
 

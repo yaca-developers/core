@@ -34,12 +34,15 @@ async fn run_sh() {
     let result = shell
         .call(
             &mut tool_context,
-            serde_json::from_str(r#"{"commands": [{"input": "exit"}, "enter"]}"#).unwrap(),
+            serde_json::from_str(r#"{"commands": [{"input": "for i in $(seq 1 1000); do echo $i; done"}, "enter", {"input": "exit"}, "enter"]}"#).unwrap(),
         )
         .await
         .expect("Run failed");
     if let ShellOutput::Output(out) = result {
         logging::info!("stdout: {}", out);
+        for i in 1..=1000 {
+            assert!(out.contains(&format!("{}\n", i)), "missing {i}");
+        }
 
         if let Some(sessions) = tool_context.get::<SessionMapContext>() {
             let read_mutex = sessions.read().await;
