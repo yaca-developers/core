@@ -13,7 +13,11 @@ mod tests;
 
 #[trait_variant::make(Send)]
 pub trait Agent {
-    async fn send_turn(&mut self, message: impl Into<Message> + Send) -> anyhow::Result<()>;
+    async fn send_turn(
+        &mut self,
+        message: impl Into<Message> + Send,
+        max_tokens: u64,
+    ) -> anyhow::Result<()>;
     async fn load_conversation(&mut self, id: impl AsRef<str> + Send) -> anyhow::Result<()>;
     fn conversation_id(&self) -> &str;
 }

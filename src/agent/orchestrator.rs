@@ -93,7 +93,11 @@ impl<M> super::Agent for OrchestratorAgent<M>
 where
     M: CompletionModel + 'static,
 {
-    async fn send_turn(&mut self, message: impl Into<Message> + Send) -> anyhow::Result<()> {
+    async fn send_turn(
+        &mut self,
+        message: impl Into<Message> + Send,
+        max_tokens: u64,
+    ) -> anyhow::Result<()> {
         let message = message.into();
         let new_message_idx = self
             .conversation_len()
@@ -111,6 +115,7 @@ where
             .stream_prompt(message)
             .conversation(self.conversation_id.to_string())
             .max_turns(usize::MAX)
+            .max_tokens(max_tokens)
             .await;
         while let Some(item) = stream.next().await {
             let Some(hook) = self.lifecycle_hook.as_ref() else {
