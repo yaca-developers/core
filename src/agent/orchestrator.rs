@@ -122,6 +122,8 @@ where
                         continue;
                     };
                     hook.on_update_message(new_message_idx, &assistant)
+                        .await
+                        .with_context(|| "lifecycle hook on_update_message prompt stream")?;
                 }
                 _ => {}
             }

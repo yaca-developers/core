@@ -41,5 +41,5 @@ pub trait AgentLifecycleHook {
 
     async fn on_new_message(&self, index: usize, message: &Message) -> anyhow::Result<()>;
 
-    fn on_update_message(&self, index: usize, message: &MessageUpdate);
+    async fn on_update_message(&self, index: usize, message: &MessageUpdate) -> anyhow::Result<()>;
 }

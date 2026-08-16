@@ -23,7 +23,11 @@ pub trait DynAgentLifecycleHook {
         message: &'s Message,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 's>>;
 
-    fn on_update_message(&self, index: usize, message: &MessageUpdate);
+    fn on_update_message<'s>(
+        &'s self,
+        index: usize,
+        message: &'s MessageUpdate,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 's>>;
 }
 
 impl<T> DynAgentLifecycleHook for T
@@ -50,7 +54,13 @@ where
         ))
     }
 
-    fn on_update_message(&self, index: usize, message: &MessageUpdate) {
-        <Self as AgentLifecycleHook>::on_update_message(self, index, message)
+    fn on_update_message<'s>(
+        &'s self,
+        index: usize,
+        message: &'s MessageUpdate,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 's>> {
+        Box::pin(<Self as AgentLifecycleHook>::on_update_message(
+            self, index, message,
+        ))
     }
 }
