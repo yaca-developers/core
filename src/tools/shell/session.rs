@@ -162,6 +162,14 @@ impl Session {
     pub async fn terminal(&self) -> RwLockReadGuard<'_, TerminalState> {
         self.terminal.read().await
     }
+
+    pub async fn is_alive(&self) -> bool {
+        self.shell_process
+            .write()
+            .await
+            .try_wait()
+            .is_ok_and(|it| it.is_none())
+    }
 }
 
 #[derive(Debug)]

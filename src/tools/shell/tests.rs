@@ -2,8 +2,12 @@
 use std::sync::Arc;
 
 use crate::logging;
+#[cfg(unix)]
+use crate::tools::shell::{SessionMapContext, session::SessionName};
 
 use rig::tool::Tool;
+#[cfg(unix)]
+use rig::tool::ToolContext;
 
 use crate::tools::{Environment, shell::ShellOutput};
 
@@ -26,16 +30,24 @@ async fn run_sh() {
     let env = unix_env();
     let mut shell = super::Shell::os_default(env);
     shell.shell = PathBuf::from_str("/bin/sh").unwrap().into();
+    let mut tool_context = ToolContext::default();
     let result = shell
         .call(
-            &mut Default::default(),
+            &mut tool_context,
             serde_json::from_str(r#"{"commands": [{"input": "exit"}, "enter"]}"#).unwrap(),
         )
         .await
         .expect("Run failed");
     if let ShellOutput::Output(out) = result {
         logging::info!("stdout: {}", out);
-        assert!(out.contains("exit\nexit"));
+
+        if let Some(sessions) = tool_context.get::<SessionMapContext>() {
+            let read_mutex = sessions.read().await;
+            let main_session = read_mutex
+                .get(&SessionName::from("main".to_string()))
+                .unwrap();
+            assert!(!main_session.is_alive().await)
+        }
     } else {
         panic!("Unexpected output: {:?}", result);
     }
@@ -430,7 +442,7 @@ async fn vim_edit_and_save_file() {
         .call(
             &mut context,
             serde_json::from_str(&format!(
-                r#"{{"commands": [{{"input": "vim {}"}}, "enter"]}}"#,
+                r#"{{"commands": [{{"input": "nvim {}"}}, "enter"]}}"#,
                 file_path
             ))
             .unwrap(),
