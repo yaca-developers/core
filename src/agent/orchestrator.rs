@@ -10,7 +10,7 @@ use rig::{
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::{Agent, MessageUpdate},
+    agent::{Agent, MessageUpdate, dynhook},
     logging,
     tools::{Environment, Shell},
 };
@@ -24,7 +24,7 @@ where
     rig: rig::Agent<M>,
     conversation_id: Arc<str>,
     conversation_len: RwLock<Option<usize>>,
-    lifecycle_hook: Option<Box<dyn super::AgentLifecycleHook + Send + Sync>>,
+    lifecycle_hook: Option<Box<dyn dynhook::DynAgentLifecycleHook + Send + Sync>>,
 }
 
 impl<M> OrchestratorAgent<M>

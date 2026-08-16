@@ -1,14 +1,12 @@
-use std::pin::Pin;
-
 use rig::{
     agent::Text,
     memory::MemoryError,
-    message::{AssistantContent, ReasoningContent, ToolCall},
+    message::{ReasoningContent, ToolCall},
     prelude::*,
     streaming::ToolCallDeltaContent,
 };
-use uuid::Uuid;
 
+pub(crate) mod dynhook;
 pub mod orchestrator;
 #[cfg(test)]
 mod tests;
@@ -33,18 +31,15 @@ pub enum MessageUpdate {
     },
 }
 
+#[trait_variant::make(Send)]
 pub trait AgentLifecycleHook {
-    fn on_switch_conversation(
+    async fn on_switch_conversation(
         &self,
         id: &str,
         memory: Result<Vec<Message>, MemoryError>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
+    ) -> anyhow::Result<()>;
 
-    fn on_new_message(
-        &self,
-        index: usize,
-        message: &Message,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
+    async fn on_new_message(&self, index: usize, message: &Message) -> anyhow::Result<()>;
 
     fn on_update_message(&self, index: usize, message: &MessageUpdate);
 }
