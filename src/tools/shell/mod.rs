@@ -98,9 +98,11 @@ impl Tool for Shell {
     fn description(&self) -> String {
         if let Some(os_name) = self.env.os_name() {
             format!(
-                "Access to a {} {} shell in a full-featured terminal emulator. Keypress-based operation and interactive CLI are supported.",
+                "Access to a {} {} shell in a full-featured terminal emulator. Keypress-based operation and interactive CLI are supported. {} seconds sattle down. Only at most {} new lines returned.",
                 os_name,
-                self.shell.file_name().unwrap().to_string_lossy()
+                self.shell.file_name().unwrap().to_string_lossy(),
+                self.sattle_down_timeout.as_secs(),
+                self.max_scrollback_lines,
             )
         } else {
             "Access to a shell".into()
@@ -203,7 +205,13 @@ impl Tool for Shell {
         session.advance_bytes(output).await?;
 
         let all_lines = session.terminal().await.screen().all_lines();
-        let unseen_lines = scrollback.read().await.get_unseen(all_lines.iter()).into();
+        let unseen_lines = scrollback
+            .read()
+            .await
+            .get_unseen(all_lines.iter())
+            .into_iter()
+            .take(self.max_scrollback_lines)
+            .into();
         scrollback.write().await.update(all_lines);
         Ok(unseen_lines)
     }
@@ -220,6 +228,23 @@ impl Shell {
             sattle_down_timeout: Duration::from_secs(5),
             ctx: RwLock::new(HashMap::default()),
             max_scrollback_lines: 30,
+        }
+    }
+
+    pub fn new(
+        shell: impl Into<Arc<Path>>,
+        env: impl Into<Arc<Environment>>,
+        pty_size: impl Into<PtySize>,
+        sattle_down_timeout: impl Into<Duration>,
+        max_scrollback_lines: impl Into<usize>,
+    ) -> Self {
+        Self {
+            shell: shell.into(),
+            env: env.into(),
+            pty_size: pty_size.into(),
+            sattle_down_timeout: sattle_down_timeout.into(),
+            ctx: RwLock::new(HashMap::default()),
+            max_scrollback_lines: max_scrollback_lines.into(),
         }
     }
 }
