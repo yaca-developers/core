@@ -28,6 +28,7 @@ pub struct Shell {
     pty_size: PtySize,
     sattle_down_timeout: Duration,
     ctx: RwLock<HashMap<SessionName, (Session, Arc<RwLock<Scrollback>>)>>,
+    max_scrollback_lines: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -218,6 +219,7 @@ impl Shell {
             pty_size: PtySize::default(),
             sattle_down_timeout: Duration::from_secs(5),
             ctx: RwLock::new(HashMap::default()),
+            max_scrollback_lines: 30,
         }
     }
 }
