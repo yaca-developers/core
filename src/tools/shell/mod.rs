@@ -33,10 +33,11 @@ pub struct Shell {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ShellArgs {
     commands: Arc<[ShellCommand]>,
     /// Use this parameter to switch shell instances. Defaults to `main`.
-    #[serde(default)]
+    #[serde(default, flatten)]
     session: SessionName,
     /// Defaults to false. If set, you will be notified in a future turn.
     #[serde(default)]
@@ -44,18 +45,20 @@ pub struct ShellArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
+#[schemars(inline)]
 pub enum ShellCommand {
     /// Paste into the shell.
     Paste(String),
-    /// Emulate per-keypress.
+    /// Emulate keypresses. Multi characters sent in sequence.
     Press(String),
     /// Send a special one.
     Send(ShellCommandSend),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
+#[schemars(inline)]
 pub enum ShellCommandSend {
     /// Send a keypress.
     Enter,
