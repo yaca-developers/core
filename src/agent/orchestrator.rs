@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
+use derive_builder::Builder;
 use futures::StreamExt;
 use rig::{
     memory::{ConversationMemory, MemoryError},
@@ -15,36 +16,170 @@ use crate::{
     tools::{Environment, Shell},
 };
 
-pub struct OrchestratorAgent {
-    env: Arc<Environment>,
-    memory: Arc<dyn ConversationMemory>,
+pub struct OrchestratorAgent<P: Initializer> {
+    init: P,
     rig: rig::Agent,
     conversation_id: Arc<str>,
     conversation_len: RwLock<Option<usize>>,
     lifecycle_hook: Option<Box<dyn dynhook::DynAgentLifecycleHook + Send + Sync>>,
 }
 
-impl OrchestratorAgent {
-    pub fn new<M>(
+#[derive(Debug)]
+pub struct McpServiceAndTools<S: rmcp::Service<rmcp::RoleClient>>(
+    rmcp::service::RunningService<rmcp::RoleClient, S>,
+    Vec<rmcp::model::Tool>,
+);
+
+pub trait Initializer {
+    type Memory: ConversationMemory + 'static;
+    type Model: CompletionModel + 'static;
+    type Client: CompletionClient<CompletionModel = Self::Model>;
+    type McpService: rmcp::service::Service<rmcp::RoleClient>;
+
+    fn get_env(&self) -> Arc<Environment>;
+    fn get_client(&self) -> &Self::Client;
+    fn get_model(&self) -> &str;
+    fn get_conversation_memory(&self) -> Self::Memory;
+
+    fn get_mcp_services_and_tools(
+        &self,
+    ) -> impl Iterator<Item = &McpServiceAndTools<Self::McpService>>;
+
+    fn new_agent(&self) -> rig::Agent {
+        let mut client = self
+            .get_client()
+            .agent(self.get_model())
+            .memory(self.get_conversation_memory())
+            .tool(Shell::os_default(self.get_env()));
+        for McpServiceAndTools(service, tools) in self.get_mcp_services_and_tools() {
+            for tool in tools {
+                logging::trace!(
+                    "{:?}: {}",
+                    tool.name.as_ref(),
+                    tool.description.as_deref().unwrap_or_default()
+                );
+            }
+            client = client.rmcp_tools(
+                tools.into_iter().cloned().collect(),
+                service.peer().to_owned(),
+            );
+        }
+        client.build()
+    }
+}
+
+#[derive(Debug, Builder)]
+pub struct OrchestratorParams<
+    Model: CompletionModel,
+    Client: CompletionClient<CompletionModel = Model>,
+    Memory: ConversationMemory,
+> {
+    pub client: Client,
+    #[builder(setter(into))]
+    pub env: Arc<Environment>,
+    #[builder(setter(into))]
+    pub model_name: Arc<str>,
+    #[builder(setter(into))]
+    pub memory: Arc<Memory>,
+    #[builder(private, default)]
+    pub mcp_services_tools: Arc<[McpServiceAndTools<rmcp::model::ClientInfo>]>,
+}
+
+impl<
+    Model: CompletionModel + 'static,
+    Client: CompletionClient<CompletionModel = Model>,
+    Memory: ConversationMemory + 'static,
+> Initializer for OrchestratorParams<Model, Client, Memory>
+{
+    type Memory = Arc<Memory>;
+
+    type Model = Model;
+
+    type Client = Client;
+
+    type McpService = rmcp::model::ClientInfo;
+
+    fn get_client(&self) -> &Self::Client {
+        &self.client
+    }
+
+    fn get_model(&self) -> &str {
+        &self.model_name
+    }
+
+    fn get_conversation_memory(&self) -> Self::Memory {
+        Arc::clone(&self.memory)
+    }
+
+    fn get_env(&self) -> Arc<Environment> {
+        Arc::clone(&self.env)
+    }
+
+    fn get_mcp_services_and_tools(
+        &self,
+    ) -> impl Iterator<Item = &McpServiceAndTools<Self::McpService>> {
+        self.mcp_services_tools.iter()
+    }
+}
+
+impl<
+    Model: CompletionModel + 'static,
+    Client: CompletionClient<CompletionModel = Model>,
+    Memory: ConversationMemory + 'static,
+> OrchestratorParams<Model, Client, Memory>
+{
+    pub fn new(
         env: impl Into<Arc<Environment>>,
-        client: impl CompletionClient<CompletionModel = M>,
-        model: impl Into<String>,
-        memory: impl ConversationMemory + 'static,
-        conversation_id: impl AsRef<str>,
-    ) -> Self
-    where
-        M: CompletionModel + 'static,
-    {
-        let env = env.into();
-        let memory = Arc::new(memory);
-        let rig = client
-            .agent(model)
-            .memory(Arc::clone(&memory))
-            .tool(Shell::os_default(Arc::clone(&env)))
-            .build();
+        client: Client,
+        model: impl Into<Arc<str>>,
+        memory: impl Into<Memory>,
+    ) -> Self {
         Self {
-            env,
-            memory,
+            env: env.into(),
+            client,
+            model_name: model.into(),
+            memory: Arc::new(memory.into()),
+            mcp_services_tools: Default::default(),
+        }
+    }
+
+    pub async fn with_mcp_servers(
+        mut self,
+        transport: impl IntoIterator<Item = impl rmcp::transport::Transport<rmcp::RoleClient> + 'static>,
+        tools_filter: impl FnMut(&rmcp::model::Tool) -> bool + Clone,
+    ) -> anyhow::Result<Self> {
+        use rmcp::ServiceExt;
+        let client_info = crate::tools::mcp::get_client_info();
+        let pairs = futures::future::try_join_all(transport.into_iter().map(
+            async |transport| -> anyhow::Result<McpServiceAndTools<_>> {
+                let client = client_info
+                    .clone()
+                    .serve(transport)
+                    .await
+                    .with_context(|| "connection error")?;
+                let tools: Vec<_> = client
+                    .list_tools(Default::default())
+                    .await
+                    .with_context(|| "failed listing tools")?
+                    .tools
+                    .into_iter()
+                    .filter(tools_filter.clone())
+                    .collect();
+                Ok(McpServiceAndTools(client, tools))
+            },
+        ))
+        .await?;
+
+        self.mcp_services_tools = pairs.into();
+        Ok(self)
+    }
+}
+
+impl<P: Initializer> OrchestratorAgent<P> {
+    pub fn new(params: P, conversation_id: impl AsRef<str>) -> Self {
+        let rig = params.new_agent();
+        Self {
+            init: params,
             rig,
             conversation_id: conversation_id.as_ref().into(),
             conversation_len: RwLock::new(None),
@@ -53,7 +188,10 @@ impl OrchestratorAgent {
     }
 }
 
-impl OrchestratorAgent {
+impl<P> OrchestratorAgent<P>
+where
+    P: Initializer + Send + Sync,
+{
     pub async fn with_lifecycle_hook(
         mut self,
         hook: impl super::AgentLifecycleHook + Send + Sync + 'static,
@@ -62,7 +200,10 @@ impl OrchestratorAgent {
         let switch_hook = hook
             .on_switch_conversation(
                 self.conversation_id(),
-                self.memory.load(self.conversation_id()).await,
+                self.init
+                    .get_conversation_memory()
+                    .load(self.conversation_id())
+                    .await,
             )
             .await;
         if let Err(err) = switch_hook {
@@ -76,14 +217,18 @@ impl OrchestratorAgent {
         if let Some(len) = self.conversation_len.read().await.as_ref() {
             return Ok(*len);
         }
-        self.memory
+        self.init
+            .get_conversation_memory()
             .load(self.conversation_id())
             .await
             .map(|m| m.len())
     }
 }
 
-impl super::Agent for OrchestratorAgent {
+impl<P> super::Agent for OrchestratorAgent<P>
+where
+    P: Initializer + Send + Sync,
+{
     async fn send_turn(
         &mut self,
         message: impl Into<Message> + Send,
@@ -131,7 +276,11 @@ impl super::Agent for OrchestratorAgent {
     async fn load_conversation(&mut self, id: impl AsRef<str> + Send) -> anyhow::Result<()> {
         self.conversation_id = id.as_ref().into();
         if let Some(hook) = self.lifecycle_hook.as_ref() {
-            let messages = self.memory.load(self.conversation_id()).await;
+            let messages = self
+                .init
+                .get_conversation_memory()
+                .load(self.conversation_id())
+                .await;
             if let Ok(messages) = messages.as_ref() {
                 *self.conversation_len.write().await = Some(messages.len());
             }

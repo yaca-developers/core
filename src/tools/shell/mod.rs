@@ -13,6 +13,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use wezterm_term::Line;
 
+use crate::iter::IteratorExt;
 use crate::tools::Environment;
 use crate::tools::shell::scrollback::Scrollback;
 use crate::tools::shell::session::{Session, SessionName, SessionTermination};
@@ -210,7 +211,7 @@ impl Tool for Shell {
             .await
             .get_unseen(all_lines.iter())
             .into_iter()
-            .take(self.max_scrollback_lines)
+            .last_n(self.max_scrollback_lines)
             .into();
         scrollback.write().await.update(all_lines);
         Ok(unseen_lines)

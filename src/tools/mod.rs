@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use sysinfo::System;
 
+pub mod mcp;
 mod shell;
-mod mcp;
 
 pub use shell::Shell;
 
+#[derive(Debug, Clone)]
 pub struct Environment {
     os_name: Option<Arc<str>>,
     host_name: Option<Arc<str>>,
