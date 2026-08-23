@@ -15,29 +15,26 @@ use crate::{
     tools::{Environment, Shell},
 };
 
-pub struct OrchestratorAgent<M>
-where
-    M: CompletionModel,
-{
+pub struct OrchestratorAgent {
     env: Arc<Environment>,
     memory: Arc<dyn ConversationMemory>,
-    rig: rig::Agent<M>,
+    rig: rig::Agent,
     conversation_id: Arc<str>,
     conversation_len: RwLock<Option<usize>>,
     lifecycle_hook: Option<Box<dyn dynhook::DynAgentLifecycleHook + Send + Sync>>,
 }
 
-impl<M> OrchestratorAgent<M>
-where
-    M: CompletionModel,
-{
-    pub fn new(
+impl OrchestratorAgent {
+    pub fn new<M>(
         env: impl Into<Arc<Environment>>,
         client: impl CompletionClient<CompletionModel = M>,
         model: impl Into<String>,
         memory: impl ConversationMemory + 'static,
         conversation_id: impl AsRef<str>,
-    ) -> Self {
+    ) -> Self
+    where
+        M: CompletionModel + 'static,
+    {
         let env = env.into();
         let memory = Arc::new(memory);
         let rig = client
@@ -56,10 +53,7 @@ where
     }
 }
 
-impl<M> OrchestratorAgent<M>
-where
-    M: CompletionModel + 'static,
-{
+impl OrchestratorAgent {
     pub async fn with_lifecycle_hook(
         mut self,
         hook: impl super::AgentLifecycleHook + Send + Sync + 'static,
@@ -89,10 +83,7 @@ where
     }
 }
 
-impl<M> super::Agent for OrchestratorAgent<M>
-where
-    M: CompletionModel + 'static,
-{
+impl super::Agent for OrchestratorAgent {
     async fn send_turn(
         &mut self,
         message: impl Into<Message> + Send,
@@ -124,7 +115,7 @@ where
 
             match item.with_context(|| "prompt stream")? {
                 MultiTurnStreamItem::StreamAssistantItem(assistant) => {
-                    let Some(assistant) = streamed_to_update::<M>(assistant) else {
+                    let Some(assistant) = streamed_to_update(assistant) else {
                         continue;
                     };
                     hook.on_update_message(new_message_idx, &assistant)
@@ -156,9 +147,7 @@ where
     }
 }
 
-fn streamed_to_update<M: CompletionModel>(
-    value: StreamedAssistantContent<M::StreamingResponse>,
-) -> Option<MessageUpdate> {
+fn streamed_to_update(value: StreamedAssistantContent) -> Option<MessageUpdate> {
     match value {
         StreamedAssistantContent::Text(text) => Some(MessageUpdate::AssistantTextAppend(text)),
         StreamedAssistantContent::ToolCall {
@@ -166,16 +155,17 @@ fn streamed_to_update<M: CompletionModel>(
             internal_call_id: _,
         } => Some(MessageUpdate::ToolCallReplace(tool_call)),
         StreamedAssistantContent::ToolCallDelta {
-            id,
-            internal_call_id: _,
+            internal_call_id: id,
             content,
         } => Some(MessageUpdate::ToolCallAppend { id, content }),
-        StreamedAssistantContent::Reasoning(reasoning) => {
+        StreamedAssistantContent::Reasoning { reasoning, id } => {
             Some(MessageUpdate::AssistantReasoningReplace(reasoning.content))
         }
-        StreamedAssistantContent::ReasoningDelta { id: _, reasoning } => {
-            Some(MessageUpdate::AssistantReasoningAppend(reasoning))
-        }
+        StreamedAssistantContent::ReasoningDelta {
+            id: _,
+            provider_id: _,
+            reasoning,
+        } => Some(MessageUpdate::AssistantReasoningAppend(reasoning)),
         _ => None,
     }
 }

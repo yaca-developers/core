@@ -3,6 +3,7 @@ use std::sync::Arc;
 use sysinfo::System;
 
 mod shell;
+mod mcp;
 
 pub use shell::Shell;
 
