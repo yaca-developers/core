@@ -227,7 +227,7 @@ impl Shell {
             pty_size: PtySize::default(),
             sattle_down_timeout: Duration::from_secs(5),
             ctx: RwLock::new(HashMap::default()),
-            max_scrollback_lines: 30,
+            max_scrollback_lines: 500,
         }
     }
 
