@@ -1,7 +1,8 @@
 use portable_pty::PtySize;
 use rig::prelude::*;
 use rig::tool::{IntoToolOutput, Tool};
-use schemars::{JsonSchema, schema_for};
+use schemars::generate::SchemaSettings;
+use schemars::{JsonSchema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,7 +38,7 @@ pub struct Shell {
 pub struct ShellArgs {
     commands: Arc<[ShellCommand]>,
     /// Use this parameter to switch shell instances. Defaults to `main`.
-    #[serde(default, flatten)]
+    #[serde(default)]
     session: SessionName,
     /// Defaults to false. If set, you will be notified in a future turn.
     #[serde(default)]
@@ -46,7 +47,6 @@ pub struct ShellArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[schemars(inline)]
 pub enum ShellCommand {
     /// Paste into the shell.
     Paste(String),
@@ -57,8 +57,7 @@ pub enum ShellCommand {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
 pub enum ShellCommandSend {
     /// Send a keypress.
     Enter,
@@ -109,12 +108,16 @@ impl Tool for Shell {
                 self.max_scrollback_lines,
             )
         } else {
-            "Access to a shell".into()
+            "Access to a shell in a full-featured terminal emulator. Keypress-based operation and interactive CLI are supported. {} seconds sattle down. Only at most {} new lines returned.".into()
         }
     }
 
     fn parameters(&self) -> serde_json::Value {
-        schema_for!(ShellArgs).into()
+        let mut settings = SchemaSettings::default();
+        settings.inline_subschemas = true;
+        SchemaGenerator::new(settings)
+            .root_schema_for::<ShellArgs>()
+            .to_value()
     }
 
     async fn call(
@@ -143,9 +146,7 @@ impl Tool for Shell {
         for command in args.commands.iter() {
             match command {
                 ShellCommand::Paste(text) => {
-                    if text.len() > 1 {
-                        session.send_input(text).await?;
-                    }
+                    session.send_input(text).await?;
                 }
                 ShellCommand::Press(text) => {
                     let mut chars = text.chars();

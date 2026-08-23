@@ -23,7 +23,7 @@ pub trait IteratorExt: Iterator {
     ///
     /// # Example
     /// ```
-    /// # use last_n::IteratorExt;
+    /// # use crate::iter::IteratorExt;
     /// let last_three: Vec<_> = (1..=10).last_n(3).collect();
     /// assert_eq!(last_three, vec![8, 9, 10]);
     /// ```

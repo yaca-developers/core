@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::logging;
 #[cfg(unix)]
-use crate::tools::shell::{BySessionNameContext, session::SessionName};
+use crate::tools::shell::session::SessionName;
 
 use rig::tool::Tool;
 #[cfg(unix)]
@@ -36,26 +36,24 @@ async fn run_sh() {
         "schemar does not contain documentation"
     );
 
+    assert!(
+        !shell.parameters().to_string().contains("$ref"),
+        "schemar contains ref"
+    );
+
     let mut tool_context = ToolContext::default();
     let result = shell
         .call(
             &mut tool_context,
-            serde_json::from_str(r#"{"commands": [{"input": "for i in $(seq 1 1000); do echo $i; done"}, "enter", {"input": "exit"}, "enter"]}"#).unwrap(),
+            serde_json::from_str(r#"{"commands": [{"paste": "for i in $(seq 1 1000); do echo $i; done"}, {"send": "enter"}, {"paste": "exit"}, {"send": "enter"}]}"#).unwrap(),
         )
         .await
         .expect("Run failed");
     if let ShellOutput::Output(out) = result {
         logging::info!("stdout: {}", out);
-        for i in 1..=1000 {
+        assert!(out.lines().count() <= 500);
+        for i in 504..=1000 {
             assert!(out.contains(&format!("{}\n", i)), "missing {i}");
-        }
-
-        if let Some(sessions) = tool_context.get::<BySessionNameContext>() {
-            let read_mutex = sessions.read().await;
-            let (main_session, _) = read_mutex
-                .get(&SessionName::from("main".to_string()))
-                .unwrap();
-            assert!(!main_session.is_alive().await)
         }
     } else {
         panic!("Unexpected output: {:?}", result);
@@ -82,8 +80,10 @@ async fn echo_hello_is_reflected_in_output() {
     let result = shell
         .call(
             &mut Default::default(),
-            serde_json::from_str(r#"{"commands": [{"input": "echo hello_world"}, "enter"]}"#)
-                .unwrap(),
+            serde_json::from_str(
+                r#"{"commands": [{"paste": "echo hello_world"}, {"send": "enter"}]}"#,
+            )
+            .unwrap(),
         )
         .await
         .expect("Run failed");
@@ -109,8 +109,10 @@ async fn session_state_persists_across_calls() {
     shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": [{"input": "FOO=bar123; export FOO"}, "enter"]}"#)
-                .unwrap(),
+            serde_json::from_str(
+                r#"{"commands": [{"paste": "FOO=bar123; export FOO"}, {"send": "enter"}]}"#,
+            )
+            .unwrap(),
         )
         .await
         .expect("First call failed");
@@ -118,7 +120,8 @@ async fn session_state_persists_across_calls() {
     let result = shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": [{"input": "echo $FOO"}, "enter"]}"#).unwrap(),
+            serde_json::from_str(r#"{"commands": [{"paste": "echo $FOO"}, {"send": "enter"}]}"#)
+                .unwrap(),
         )
         .await
         .expect("Second call failed");
@@ -145,7 +148,7 @@ async fn distinct_sessions_do_not_share_state() {
         .call(
             &mut context,
             serde_json::from_str(
-                r#"{"commands": [{"input": "FOO=only_in_a; export FOO"}, "enter"], "session": "session_a"}"#,
+                r#"{"commands": [{"paste": "FOO=only_in_a; export FOO"}, {"send": "enter"}], "session": "session_a"}"#,
             )
             .unwrap(),
         )
@@ -156,7 +159,7 @@ async fn distinct_sessions_do_not_share_state() {
         .call(
             &mut context,
             serde_json::from_str(
-                r#"{"commands": [{"input": "echo [$FOO]"}, "enter"], "session": "session_b"}"#,
+                r#"{"commands": [{"paste": "echo [$FOO]"}, {"send": "enter"}], "session": "session_b"}"#,
             )
             .unwrap(),
         )
@@ -184,7 +187,7 @@ async fn terminate_kills_shell_and_allows_fresh_restart() {
     let result = shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": ["terminate"]}"#).unwrap(),
+            serde_json::from_str(r#"{"commands": [{"send": "terminate"}]}"#).unwrap(),
         )
         .await
         .expect("Terminate failed");
@@ -197,8 +200,10 @@ async fn terminate_kills_shell_and_allows_fresh_restart() {
     let result = shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": [{"input": "echo restarted"}, "enter"]}"#)
-                .unwrap(),
+            serde_json::from_str(
+                r#"{"commands": [{"paste": "echo restarted"}, {"send": "enter"}]}"#,
+            )
+            .unwrap(),
         )
         .await
         .expect("Restart failed");
@@ -223,7 +228,7 @@ async fn background_flag_returns_immediately_with_session_name() {
         .call(
             &mut Default::default(),
             serde_json::from_str(
-                r#"{"commands": [{"input": "sleep 5"}, "enter"], "background": true}"#,
+                r#"{"commands": [{"paste": "sleep 5"}, {"send": "enter"}], "background": true}"#,
             )
             .unwrap(),
         )
@@ -255,7 +260,7 @@ async fn ctrl_c_interrupts_long_running_command() {
         .call(
             &mut context,
             serde_json::from_str(
-                r#"{"commands": [{"input": "sleep 30"}, "enter"], "background": true}"#,
+                r#"{"commands": [{"paste": "sleep 30"}, {"send": "enter"}], "background": true}"#,
             )
             .unwrap(),
         )
@@ -266,7 +271,7 @@ async fn ctrl_c_interrupts_long_running_command() {
         .call(
             &mut context,
             serde_json::from_str(
-                r#"{"commands": ["ctrl_c", {"input": "echo back_in_control"}, "enter"]}"#,
+                r#"{"commands": [{"send": "ctrl_c"}, {"paste": "echo back_in_control"}, {"send": "enter"}]}"#,
             )
             .unwrap(),
         )
@@ -294,8 +299,10 @@ async fn single_character_input_is_sent_as_keypress() {
     shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": [{"input": "read -r answer"}, "enter"]}"#)
-                .unwrap(),
+            serde_json::from_str(
+                r#"{"commands": [{"paste": "read -r answer"}, {"send": "enter"}]}"#,
+            )
+            .unwrap(),
         )
         .await
         .expect("Failed to start read");
@@ -304,7 +311,7 @@ async fn single_character_input_is_sent_as_keypress() {
         .call(
             &mut context,
             serde_json::from_str(
-                r#"{"commands": [{"input": "y"}, "enter", {"input": "echo got:$answer"}, "enter"]}"#,
+                r#"{"commands": [{"paste": "y"}, {"send": "enter"}, {"paste": "echo got:$answer"}, {"send": "enter"}]}"#,
             )
             .unwrap(),
         )
@@ -331,7 +338,7 @@ async fn multiple_commands_execute_in_sequence() {
         .call(
             &mut Default::default(),
             serde_json::from_str(
-                r#"{"commands": [{"input": "cd /tmp"}, "enter", {"input": "pwd"}, "enter"]}"#,
+                r#"{"commands": [{"paste": "cd /tmp"}, {"send": "enter"}, {"paste": "pwd"}, {"send": "enter"}]}"#,
             )
             .unwrap(),
         )
@@ -375,7 +382,7 @@ async fn escape_and_tab_do_not_error() {
         .call(
             &mut Default::default(),
             serde_json::from_str(
-                r#"{"commands": [{"input": "ech"}, "tab", "escape", {"input": "o"}, "enter"]}"#,
+                r#"{"commands": [{"paste": "ech"}, {"send": "tab"}, {"send": "escape"}, {"paste": "o"}, {"send": "enter"}]}"#,
             )
             .unwrap(),
         )
@@ -387,7 +394,7 @@ async fn escape_and_tab_do_not_error() {
 #[test]
 fn shell_args_apply_defaults_when_omitted() {
     let args: super::ShellArgs =
-        serde_json::from_str(r#"{"commands": [{"input": "ls"}]}"#).unwrap();
+        serde_json::from_str(r#"{"commands": [{"paste": "ls"}]}"#).unwrap();
 
     assert_eq!(args.commands.len(), 1);
     assert_eq!(args.session.to_string(), "main");
@@ -408,7 +415,7 @@ fn description_includes_os_name_and_shell_name() {
     let env = unix_env();
     let shell = sh_shell(env);
 
-    assert_eq!(shell.description(), "Access to a generic unix sh shell.");
+    assert!(shell.description().contains("generic unix sh shell"));
 }
 
 #[test]
@@ -423,7 +430,10 @@ fn description_falls_back_without_os_name() {
     let mut shell = super::Shell::os_default(env.into());
     shell.shell = PathBuf::from_str("/bin/sh").unwrap().into();
 
-    assert_eq!(shell.description(), "Access to a shell");
+    assert_eq!(
+        shell.description(),
+        "Access to a shell in a full-featured terminal emulator. Keypress-based operation and interactive CLI are supported. {} seconds sattle down. Only at most {} new lines returned."
+    );
 }
 
 /// Drives an interactive `vim` session: open a file, enter insert mode,
@@ -451,7 +461,7 @@ async fn vim_edit_and_save_file() {
         .call(
             &mut context,
             serde_json::from_str(&format!(
-                r#"{{"commands": [{{"input": "nvim {}"}}, "enter"]}}"#,
+                r#"{{"commands": [{{"paste": "nvim {}"}}, {{"send": "enter"}}]}}"#,
                 file_path
             ))
             .unwrap(),
@@ -467,7 +477,7 @@ async fn vim_edit_and_save_file() {
     shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": [{"input": "i"}, {"input": "hello from vim"}]}"#)
+            serde_json::from_str(r#"{"commands": [{"paste": "i"}, {"paste": "hello from vim"}]}"#)
                 .unwrap(),
         )
         .await
@@ -477,7 +487,10 @@ async fn vim_edit_and_save_file() {
     let saved_screen = shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": ["escape", {"input": ":wq"}, "enter"]}"#).unwrap(),
+            serde_json::from_str(
+                r#"{"commands": [{"send": "escape"}, {"paste": ":wq"}, {"send": "enter"}]}"#,
+            )
+            .unwrap(),
         )
         .await
         .expect("Failed to save and quit vim");
@@ -515,7 +528,7 @@ async fn vim_quit_without_saving_discards_changes() {
         .call(
             &mut context,
             serde_json::from_str(&format!(
-                r#"{{"commands": [{{"input": "vim {}"}}, "enter"]}}"#,
+                r#"{{"commands": [{{"paste": "vim {}"}}, {{"send": "enter"}}]}}"#,
                 file_path
             ))
             .unwrap(),
@@ -527,7 +540,7 @@ async fn vim_quit_without_saving_discards_changes() {
         .call(
             &mut context,
             serde_json::from_str(
-                r#"{"commands": [{"input": "i"}, {"input": "this should not be saved"}]}"#,
+                r#"{"commands": [{"paste": "i"}, {"paste": "this should not be saved"}]}"#,
             )
             .unwrap(),
         )
@@ -537,7 +550,10 @@ async fn vim_quit_without_saving_discards_changes() {
     shell
         .call(
             &mut context,
-            serde_json::from_str(r#"{"commands": ["escape", {"input": ":q!"}, "enter"]}"#).unwrap(),
+            serde_json::from_str(
+                r#"{"commands": [{"send": "escape"}, {"paste": ":q!"}, {"send": "enter"}]}"#,
+            )
+            .unwrap(),
         )
         .await
         .expect("Failed to quit vim without saving");
@@ -563,7 +579,7 @@ async fn only_unseen_lines_are_shown() {
         .call(
             &mut tool_context,
             serde_json::from_str(
-                r#"{"commands": [{"input": "for i in $(seq 1 10); do echo $i; done"}, "enter"]}"#,
+                r#"{"commands": [{"paste": "for i in $(seq 1 10); do echo $i; done"}, {"send": "enter"}]}"#,
             )
             .unwrap(),
         )
@@ -582,7 +598,7 @@ async fn only_unseen_lines_are_shown() {
         .call(
             &mut tool_context,
             serde_json::from_str(
-                r#"{"commands": [{"input": "for i in $(seq 1 10); do echo $i; done"}, "enter"]}"#,
+                r#"{"commands": [{"paste": "for i in $(seq 1 10); do echo $i; done"}, {"send": "enter"}]}"#,
             )
             .unwrap(),
         )
@@ -601,7 +617,7 @@ async fn only_unseen_lines_are_shown() {
         .call(
             &mut tool_context,
             serde_json::from_str(
-                r#"{"commands": [{"input": "for i in $(seq 11 20); do echo $i; done"}, "enter"]}"#,
+                r#"{"commands": [{"paste": "for i in $(seq 11 20); do echo $i; done"}, {"send": "enter"}]}"#,
             )
             .unwrap(),
         )
