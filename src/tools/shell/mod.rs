@@ -108,7 +108,7 @@ impl Tool for Shell {
                 self.max_scrollback_lines,
             )
         } else {
-            "Access to a shell in a full-featured terminal emulator. Keypress-based operation and interactive CLI are supported. {} seconds sattle down. Only at most {} new lines returned.".into()
+            "Access to a shell in a full-featured terminal emulator. Keypress-based operation and interactive CLI are supported. {} seconds sattle down.".into()
         }
     }
 
@@ -239,7 +239,7 @@ impl Shell {
             pty_size: PtySize::default(),
             sattle_down_timeout: Duration::from_secs(5),
             ctx: RwLock::new(HashMap::default()),
-            max_scrollback_lines: 500,
+            max_scrollback_lines: 70,
         }
     }
 
