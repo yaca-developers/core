@@ -12,8 +12,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 smol_str = { version = "0.3.6", features = ["serde"] }
 sysinfo = "0.39.6"
-wezterm-term = { git = "ssh://git@github.com/yaca-developers/wezterm.git", rev = "d9c5846a" }
-termwiz = { git = "ssh://git@github.com/yaca-developers/wezterm.git", rev = "d9c5846a" }
+wezterm-term = { git = "https://github.com/yaca-developers/wezterm.git", rev = "d9c5846a" }
+termwiz = { git = "https://github.com/yaca-developers/wezterm.git", rev = "d9c5846a" }
 thiserror = "2.0.19"
 tokio = { version = "1.53", features = ["fs", "macros", "rt-multi-thread"] }
 tracing = { version = "0.1", optional = true }
