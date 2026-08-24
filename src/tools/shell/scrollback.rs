@@ -8,6 +8,12 @@ pub struct Scrollback {
     seen: Vec<LineHash>,
 }
 
+#[derive(Debug, Default)]
+pub struct ScrollbackUpdate {
+    pub full_refresh: bool,
+    pub new_len: usize,
+}
+
 pub trait HashLine {
     fn hash_line(&self) -> LineHash;
 }
@@ -17,7 +23,9 @@ impl Scrollback {
         Self { seen: vec![] }
     }
 
-    pub fn update<L: HashLine>(&mut self, lines: impl IntoIterator<Item = L>) {
+    #[allow(unused)]
+    pub fn update<L: HashLine>(&mut self, lines: impl IntoIterator<Item = L>) -> ScrollbackUpdate {
+        let mut conclusion = ScrollbackUpdate::default();
         let mut last_seen_line_idx = 0;
         let mut new_lines_iter = lines.into_iter();
         let mut last_new_line = None;
@@ -29,15 +37,22 @@ impl Scrollback {
                 last_seen_line_idx += 1;
             }
         }
+
+        conclusion.full_refresh = !self.seen.is_empty() && last_seen_line_idx <= 0;
+
         while self.seen.len() > last_seen_line_idx {
             self.seen.pop();
         }
         if let Some(new_line) = last_new_line {
             self.seen.push(new_line);
+            conclusion.new_len = 1;
         }
         while let Some(new_line) = new_lines_iter.next() {
             self.seen.push(new_line.hash_line());
+            conclusion.new_len += 1;
         }
+
+        return conclusion;
     }
 
     pub fn get_unseen<L: HashLine>(

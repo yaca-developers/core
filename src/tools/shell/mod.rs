@@ -215,9 +215,16 @@ impl Tool for Shell {
             .await
             .get_unseen(all_lines.iter())
             .into_iter()
-            .last_n(self.max_scrollback_lines)
             .into();
-        scrollback.write().await.update(all_lines);
+        let update = scrollback.write().await.update(all_lines.iter());
+
+        if update.full_refresh {
+            return Ok(all_lines
+                .iter()
+                .last_n(self.max_scrollback_lines)
+                .into());
+        }
+
         Ok(unseen_lines)
     }
 }

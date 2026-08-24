@@ -45,13 +45,37 @@ async fn run_sh() {
     let result = shell
         .call(
             &mut tool_context,
-            serde_json::from_str(r#"{"commands": [{"paste": "for i in $(seq 1 1000); do echo $i; done"}, {"send": "enter"}, {"paste": "exit"}, {"send": "enter"}]}"#).unwrap(),
+            serde_json::from_str(r#"{"commands": [{"paste": "for i in $(seq 1 1000); do echo $i; done"}, {"send": "enter"}]}"#).unwrap(),
         )
         .await
         .expect("Run failed");
     if let ShellOutput::Output(out) = result {
         logging::info!("stdout: {}", out);
-        assert!(out.lines().count() <= 500);
+        assert!(out.lines().count() >= 1000);
+        for i in 1..=1000 {
+            assert!(out.contains(&format!("{}\n", i)), "missing {i}");
+        }
+    } else {
+        panic!("Unexpected output: {:?}", result);
+    }
+
+    shell.call(
+        &mut tool_context,
+        serde_json::from_str(r#"{"commands": [{"paste": "vim"}, {"send": "enter"}, {"press": "i"}, {"paste": "hi"}]}"#).unwrap()
+    )
+        .await
+        .unwrap();
+
+    let result = shell
+        .call(
+            &mut tool_context,
+            serde_json::from_str(r#"{"commands": [{"send": "escape"}, {"press": ":q!\r"}, {"paste": "exit"}, {"send": "enter"}]}"#).unwrap()
+        )
+        .await
+        .expect("Run failed");
+    if let ShellOutput::Output(out) = result {
+        logging::info!("stdout: {}", out);
+        assert!(out.lines().count() <= 505);
         for i in 504..=1000 {
             assert!(out.contains(&format!("{}\n", i)), "missing {i}");
         }
