@@ -1,15 +1,13 @@
-use rig::{
-    agent::Text,
-    memory::MemoryError,
-    message::{ReasoningContent, ToolCall},
-    prelude::*,
-    streaming::ToolCallDeltaContent,
-};
+use rig::{memory::MemoryError, prelude::*};
+use tokio_util::sync::CancellationToken;
 
+pub mod config;
 pub(crate) mod dynhook;
 pub mod orchestrator;
 #[cfg(test)]
 mod tests;
+
+pub use yaca_transport::MessageUpdate;
 
 #[trait_variant::make(Send)]
 pub trait Agent {
@@ -17,22 +15,10 @@ pub trait Agent {
         &mut self,
         message: impl Into<Message> + Send,
         max_tokens: u64,
+        cancel: CancellationToken,
     ) -> anyhow::Result<()>;
     async fn load_conversation(&mut self, id: impl AsRef<str> + Send) -> anyhow::Result<()>;
     fn conversation_id(&self) -> &str;
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MessageUpdate {
-    Replace(Message),
-    AssistantTextAppend(Text),
-    AssistantReasoningAppend(String),
-    AssistantReasoningReplace(Vec<ReasoningContent>),
-    ToolCallReplace(ToolCall),
-    ToolCallAppend {
-        id: String,
-        content: ToolCallDeltaContent,
-    },
 }
 
 #[trait_variant::make(Send)]

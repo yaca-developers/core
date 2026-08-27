@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+yaca-transport = { path = "../yaca-transport" }
 anyhow = "1.0"
 portable-pty = { version = "0.9.0", features = ["serde_support"] }
 rig = { version = "0.42.0", features = ["rmcp"] }
@@ -16,6 +17,7 @@ wezterm-term = { git = "https://github.com/yaca-developers/wezterm.git", rev = "
 termwiz = { git = "https://github.com/yaca-developers/wezterm.git", rev = "d9c5846a" }
 thiserror = "2.0.19"
 tokio = { version = "1.53", features = ["fs", "macros", "rt-multi-thread"] }
+tokio-util = "0.7"
 tracing = { version = "0.1", optional = true }
 unicode-normalization = "0.1.25"
 url = "2.5.8"

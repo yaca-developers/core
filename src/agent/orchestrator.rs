@@ -11,7 +11,7 @@ use rig::{
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::{Agent, MessageUpdate, dynhook},
+    agent::{MessageUpdate, dynhook},
     logging,
     tools::{Environment, Shell},
 };
@@ -186,6 +186,17 @@ impl<P: Initializer> OrchestratorAgent<P> {
             lifecycle_hook: None,
         }
     }
+
+    pub fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+
+    pub async fn snapshot(&self) -> Result<Vec<Message>, MemoryError> {
+        self.init
+            .get_conversation_memory()
+            .load(self.conversation_id())
+            .await
+    }
 }
 
 impl<P> OrchestratorAgent<P>
@@ -196,7 +207,6 @@ where
         mut self,
         hook: impl super::AgentLifecycleHook + Send + Sync + 'static,
     ) -> Self {
-        use super::Agent;
         let switch_hook = hook
             .on_switch_conversation(
                 self.conversation_id(),
@@ -233,6 +243,7 @@ where
         &mut self,
         message: impl Into<Message> + Send,
         max_tokens: u64,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<()> {
         let message = message.into();
         let new_message_idx = self
@@ -253,21 +264,30 @@ where
             .max_turns(usize::MAX)
             .max_tokens(max_tokens)
             .await;
-        while let Some(item) = stream.next().await {
-            let Some(hook) = self.lifecycle_hook.as_ref() else {
-                continue;
-            };
-
-            match item.with_context(|| "prompt stream")? {
-                MultiTurnStreamItem::StreamAssistantItem(assistant) => {
-                    let Some(assistant) = streamed_to_update(assistant) else {
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    return Err(anyhow::anyhow!("turn cancelled"));
+                }
+                item = stream.next() => {
+                    let Some(item) = item else { break };
+                    let Some(hook) = self.lifecycle_hook.as_ref() else {
                         continue;
                     };
-                    hook.on_update_message(new_message_idx, &assistant)
-                        .await
-                        .with_context(|| "lifecycle hook on_update_message prompt stream")?;
+
+                    match item.with_context(|| "prompt stream")? {
+                        MultiTurnStreamItem::StreamAssistantItem(assistant) => {
+                            let Some(assistant) = streamed_to_update(assistant) else {
+                                continue;
+                            };
+                            hook.on_update_message(new_message_idx, &assistant)
+                                .await
+                                .with_context(|| "lifecycle hook on_update_message prompt stream")?;
+                        }
+                        _ => {}
+                    }
                 }
-                _ => {}
             }
         }
         Ok(())
@@ -307,7 +327,7 @@ fn streamed_to_update(value: StreamedAssistantContent) -> Option<MessageUpdate> 
             internal_call_id: id,
             content,
         } => Some(MessageUpdate::ToolCallAppend { id, content }),
-        StreamedAssistantContent::Reasoning { reasoning, id } => {
+        StreamedAssistantContent::Reasoning { reasoning, id: _ } => {
             Some(MessageUpdate::AssistantReasoningReplace(reasoning.content))
         }
         StreamedAssistantContent::ReasoningDelta {

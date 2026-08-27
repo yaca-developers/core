@@ -1,12 +1,6 @@
 use std::pin::Pin;
 
-use rig::{
-    agent::Text,
-    memory::MemoryError,
-    message::{AssistantContent, ReasoningContent, ToolCall},
-    prelude::*,
-    streaming::ToolCallDeltaContent,
-};
+use rig::{memory::MemoryError, prelude::*};
 
 use crate::agent::{AgentLifecycleHook, MessageUpdate};
 
